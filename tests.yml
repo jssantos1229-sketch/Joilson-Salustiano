@@ -1,0 +1,64 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run test:ci
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: unit
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      LOVABLE_BROWSER_AUTH_STATUS: ${{ secrets.LOVABLE_BROWSER_AUTH_STATUS }}
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: bun install --frozen-lockfile
+      - name: Install Playwright (headless Chromium)
+        run: npx --yes playwright@1.49.1 install --with-deps chromium
+      - name: Build app
+        run: bun run build
+      - name: Start preview server
+        run: bun run preview --port 8080 &
+      - name: Wait for server
+        run: |
+          for i in {1..40}; do
+            if curl -sf http://localhost:8080 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "Server did not start" && exit 1
+      - name: Run Playwright (headless, snapshots 320/768/1024)
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8080
+        # --retries=0 falha rápido para flagar flakes cedo
+        run: npx playwright test --reporter=line --retries=0
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
